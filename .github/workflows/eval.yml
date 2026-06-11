@@ -1,0 +1,28 @@
+name: Eval Suite
+
+on:
+  push:
+    paths:
+      - 'src/rag/**'
+      - 'src/agents/**'
+      - 'src/evaluation/**'
+
+jobs:
+  run-eval:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements/ml.txt
+
+    - name: Run evaluation suite
+      run: |
+        python -m src.evaluation.runner
