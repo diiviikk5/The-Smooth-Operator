@@ -1,0 +1,229 @@
+# =============================================================================
+# values.yaml — Default Helm Chart Values
+# =============================================================================
+# Override these values per environment:
+#   helm install smooth-operator . -f values-staging.yaml
+#   helm install smooth-operator . --set api.replicaCount=4
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Global settings
+# ---------------------------------------------------------------------------
+global:
+  # Docker image registry prefix
+  imageRegistry: "ghcr.io/smoothop"
+  imagePullPolicy: Always
+  # Namespace (overridden by --namespace flag)
+  namespace: smooth-operator
+
+# ---------------------------------------------------------------------------
+# API Server
+# ---------------------------------------------------------------------------
+api:
+  enabled: true
+  replicaCount: 2
+
+  image:
+    repository: "ghcr.io/smoothop/smooth-operator-api"
+    tag: "latest"
+    pullPolicy: Always
+
+  service:
+    type: ClusterIP
+    port: 8000
+
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
+  # Autoscaling (HPA)
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 8
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+  # Probes
+  livenessProbe:
+    path: /health
+    port: 8000
+    initialDelaySeconds: 15
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  readinessProbe:
+    path: /health/ready
+    port: 8000
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+  # Environment variables (non-sensitive)
+  env:
+    APP_ENV: production
+    LOG_LEVEL: info
+    API_WORKERS: "4"
+
+  # Pod annotations
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: "/metrics"
+
+  # Node selector / tolerations / affinity
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ---------------------------------------------------------------------------
+# Worker (Celery)
+# ---------------------------------------------------------------------------
+worker:
+  enabled: true
+  replicaCount: 1
+
+  image:
+    repository: "ghcr.io/smoothop/smooth-operator-worker"
+    tag: "latest"
+    pullPolicy: Always
+
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+    limits:
+      cpu: "2"
+      memory: "2Gi"
+
+  autoscaling:
+    enabled: true
+    minReplicas: 1
+    maxReplicas: 5
+    targetCPUUtilizationPercentage: 70
+    # Custom metric: Celery queue depth
+    customMetrics:
+      - name: celery_queue_depth
+        targetAverageValue: "10"
+
+  env:
+    CELERY_CONCURRENCY: "4"
+    CELERY_QUEUES: "default,scraping,email,embeddings"
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ---------------------------------------------------------------------------
+# Ingress
+# ---------------------------------------------------------------------------
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "2"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+  hosts:
+    - host: smooth-operator.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          servicePort: 8000
+  tls:
+    - secretName: smooth-operator-tls
+      hosts:
+        - smooth-operator.example.com
+
+# ---------------------------------------------------------------------------
+# Configuration (ConfigMap)
+# ---------------------------------------------------------------------------
+config:
+  # Non-sensitive environment variables loaded via ConfigMap
+  APP_NAME: "smooth-operator"
+  LOG_FORMAT: "json"
+  CHROMA_HOST: "smooth-operator-vectordb"
+  CHROMA_PORT: "8000"
+  EMBEDDING_MODEL: "all-MiniLM-L6-v2"
+  LLM_MODEL: "mistralai/Mistral-7B-Instruct-v0.3"
+  LLM_BASE_URL: "http://smooth-operator-inference:8001/v1"
+  CHUNK_SIZE: "512"
+  CHUNK_OVERLAP: "50"
+  TOP_K_RETRIEVAL: "5"
+
+# ---------------------------------------------------------------------------
+# Secrets (reference existing secret or create from values)
+# ---------------------------------------------------------------------------
+secrets:
+  # If true, the chart creates a Secret resource from the values below.
+  # In production, set to false and create secrets externally (e.g., Sealed Secrets).
+  create: false
+  # Name of existing secret to use (if create=false)
+  existingSecret: "smooth-operator-secrets"
+
+# ---------------------------------------------------------------------------
+# Persistence
+# ---------------------------------------------------------------------------
+persistence:
+  postgres:
+    enabled: true
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    size: 20Gi
+
+  redis:
+    enabled: true
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    size: 5Gi
+
+  vectordb:
+    enabled: true
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    size: 50Gi
+
+# ---------------------------------------------------------------------------
+# Monitoring
+# ---------------------------------------------------------------------------
+monitoring:
+  prometheus:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      interval: 15s
+      path: /metrics
+
+  grafana:
+    enabled: false
+    # Use the Grafana Helm chart or external Grafana instance
+    dashboards:
+      enabled: true
+
+# ---------------------------------------------------------------------------
+# Service Account
+# ---------------------------------------------------------------------------
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# ---------------------------------------------------------------------------
+# Pod Disruption Budget
+# ---------------------------------------------------------------------------
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# ---------------------------------------------------------------------------
+# Network Policy
+# ---------------------------------------------------------------------------
+networkPolicy:
+  enabled: false
