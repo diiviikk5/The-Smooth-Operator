@@ -1,0 +1,68 @@
+# =============================================================================
+# namespace.yaml — The Smooth Operator Kubernetes Namespace
+# =============================================================================
+# Isolates all Smooth Operator resources into a dedicated namespace.
+# Labels enable easy filtering (kubectl get all -n smooth-operator).
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: smooth-operator
+  labels:
+    app.kubernetes.io/name: smooth-operator
+    app.kubernetes.io/part-of: smooth-operator
+    app.kubernetes.io/managed-by: kubectl
+    # Team label for cost allocation and RBAC policies
+    team: platform
+    environment: production
+  annotations:
+    # Descriptive metadata for operators/dashboards
+    description: "The Smooth Operator — AI-powered cold outreach engine"
+---
+# ResourceQuota prevents runaway resource consumption in the namespace.
+# Adjust limits based on your cluster capacity.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: smooth-operator-quota
+  namespace: smooth-operator
+  labels:
+    app.kubernetes.io/part-of: smooth-operator
+spec:
+  hard:
+    # Max 20 pods across the entire namespace
+    pods: "20"
+    # Total CPU and memory caps
+    requests.cpu: "8"
+    requests.memory: "16Gi"
+    limits.cpu: "16"
+    limits.memory: "32Gi"
+    # Max 10 PVCs to prevent storage sprawl
+    persistentvolumeclaims: "10"
+    # Max 5 services
+    services: "10"
+---
+# LimitRange sets default resource requests/limits for pods that don't specify them.
+# This prevents pods from consuming unbounded resources.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: smooth-operator-limits
+  namespace: smooth-operator
+  labels:
+    app.kubernetes.io/part-of: smooth-operator
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: "500m"
+        memory: "512Mi"
+      defaultRequest:
+        cpu: "100m"
+        memory: "128Mi"
+      max:
+        cpu: "4"
+        memory: "8Gi"
+      min:
+        cpu: "50m"
+        memory: "64Mi"

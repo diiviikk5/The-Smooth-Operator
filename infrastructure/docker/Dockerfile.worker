@@ -1,0 +1,131 @@
+# =============================================================================
+# Dockerfile.worker — The Smooth Operator Background Worker
+# =============================================================================
+# Multi-stage build for Celery workers that handle:
+#   - Lead scraping (Playwright/httpx)
+#   - Email generation & sending
+#   - Embedding generation
+#   - Async background tasks
+#
+# Build:  docker build -f infrastructure/docker/Dockerfile.worker -t smooth-operator-worker .
+# Run:    docker run --env-file .env smooth-operator-worker
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Stage 1: Builder — install Python deps + Playwright browsers
+# ---------------------------------------------------------------------------
+FROM python:3.11-slim AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Build-time OS deps. We need extra libraries for Playwright browser automation
+# used in the scraping pipeline, plus the usual C-extension build tools.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    libffi-dev \
+    curl \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtualenv for clean copy to runtime stage
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install Python dependencies (layer-cached unless requirements change)
+COPY requirements.txt /tmp/requirements.txt
+COPY requirements-worker.txt /tmp/requirements-worker.txt
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r /tmp/requirements.txt && \
+    pip install --no-cache-dir -r /tmp/requirements-worker.txt
+
+# Install Playwright browsers (Chromium only to save space)
+RUN playwright install chromium --with-deps 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# Stage 2: Runtime — lean image for running workers
+# ---------------------------------------------------------------------------
+FROM python:3.11-slim AS runtime
+
+LABEL org.opencontainers.image.title="smooth-operator-worker" \
+      org.opencontainers.image.description="The Smooth Operator — Background Worker (Celery)" \
+      org.opencontainers.image.source="https://github.com/smoothop/smooth-operator"
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    APP_ENV=production \
+    LOG_LEVEL=info \
+    # Celery configuration defaults
+    CELERY_BROKER_URL=redis://redis:6379/0 \
+    CELERY_RESULT_BACKEND=redis://redis:6379/1 \
+    CELERY_CONCURRENCY=4 \
+    # Worker queue assignment (can be overridden to specialize workers)
+    CELERY_QUEUES=default,scraping,email,embeddings
+
+# Runtime OS dependencies:
+# - libpq5: PostgreSQL client library for psycopg2
+# - curl: for health checks
+# - Playwright runtime dependencies for headless Chromium
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    # Playwright / Chromium runtime deps
+    libnss3 \
+    libnspr4 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    libgbm1 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libasound2 \
+    libxshmfence1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy virtualenv from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy Playwright browsers from builder (if installed)
+COPY --from=builder /root/.cache/ms-playwright /root/.cache/ms-playwright 2>/dev/null || true
+
+# Create non-root user
+RUN groupadd --gid 1001 appuser && \
+    useradd --uid 1001 --gid appuser --shell /bin/bash --create-home appuser
+
+WORKDIR /app
+
+# Copy application source
+COPY src/ /app/src/
+
+# Ensure non-root user owns app files
+RUN chown -R appuser:appuser /app
+
+# Switch to non-root user
+USER appuser
+
+# Health check — Celery provides an inspect ping command to check worker liveness.
+# We verify the worker can talk to the broker and is processing tasks.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD celery -A src.workers.celery_app inspect ping --timeout 5 || exit 1
+
+# Start the Celery worker.
+# -Q: subscribe to specified queues
+# -c: concurrency (number of child processes/threads)
+# -l: log level
+# --max-tasks-per-child: restart child after N tasks to prevent memory leaks
+# -E: send task events for monitoring
+CMD ["celery", "-A", "src.workers.celery_app", "worker", \
+     "--queues", "default,scraping,email,embeddings", \
+     "--concurrency", "4", \
+     "--loglevel", "info", \
+     "--max-tasks-per-child", "100", \
+     "-E", \
+     "--without-heartbeat", \
+     "--without-mingle"]

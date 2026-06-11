@@ -1,0 +1,108 @@
+# =============================================================================
+# Dockerfile.api — The Smooth Operator API Server
+# =============================================================================
+# Multi-stage build for the FastAPI application.
+# Stage 1 (builder): Installs all Python dependencies in a virtual env.
+# Stage 2 (runtime): Copies only the venv + app code → minimal attack surface.
+#
+# Build:  docker build -f infrastructure/docker/Dockerfile.api -t smooth-operator-api .
+# Run:    docker run -p 8000:8000 --env-file .env smooth-operator-api
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Stage 1: Builder — install dependencies in an isolated virtualenv
+# ---------------------------------------------------------------------------
+FROM python:3.11-slim AS builder
+
+# Prevents Python from writing .pyc files and enables unbuffered stdout/stderr
+# so logs appear immediately in `docker logs`.
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Install OS-level build dependencies required by some Python packages
+# (e.g., psycopg2 needs libpq-dev, cryptography needs libffi-dev).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    libffi-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create a virtualenv so we can cleanly copy it to the runtime stage.
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy only requirements first → Docker layer caching means we only re-install
+# deps when requirements.txt actually changes, not on every code change.
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r /tmp/requirements.txt
+
+# ---------------------------------------------------------------------------
+# Stage 2: Runtime — minimal image with only what's needed to run
+# ---------------------------------------------------------------------------
+FROM python:3.11-slim AS runtime
+
+# Labels for container metadata (OCI standard)
+LABEL org.opencontainers.image.title="smooth-operator-api" \
+      org.opencontainers.image.description="The Smooth Operator — FastAPI API Server" \
+      org.opencontainers.image.source="https://github.com/smoothop/smooth-operator" \
+      org.opencontainers.image.vendor="SmoothOp"
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    # App-specific defaults (overridable at runtime via env vars / .env file)
+    APP_ENV=production \
+    LOG_LEVEL=info \
+    PORT=8000
+
+# Install only the runtime libraries (no compilers).
+# libpq5 is needed at runtime by psycopg2; curl is needed for the HEALTHCHECK.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the pre-built virtualenv from the builder stage.
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Create a non-root user for security. Running as root inside containers is
+# an anti-pattern — if the app is compromised, the attacker gets root on the
+# container filesystem / namespace.
+RUN groupadd --gid 1001 appuser && \
+    useradd --uid 1001 --gid appuser --shell /bin/bash --create-home appuser
+
+# Set the working directory
+WORKDIR /app
+
+# Copy application source code.
+# We copy src/ separately so code changes don't invalidate the dependency layer.
+COPY src/ /app/src/
+COPY alembic/ /app/alembic/ 
+COPY alembic.ini /app/alembic.ini
+
+# Ensure the non-root user owns the app directory
+RUN chown -R appuser:appuser /app
+
+# Switch to non-root user
+USER appuser
+
+# Expose the API port
+EXPOSE 8000
+
+# Health check — Docker (and orchestrators) use this to know if the container
+# is alive. Retries 3 times with 10s intervals before marking unhealthy.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Start the FastAPI app with uvicorn.
+# --host 0.0.0.0 binds to all interfaces (required inside containers).
+# --workers 4 uses multiple worker processes for production throughput.
+# --log-level is controlled by the LOG_LEVEL env var.
+CMD ["uvicorn", "src.api.main:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8000", \
+     "--workers", "4", \
+     "--log-level", "info", \
+     "--access-log"]

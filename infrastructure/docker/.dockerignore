@@ -1,0 +1,102 @@
+# =============================================================================
+# .dockerignore — The Smooth Operator
+# =============================================================================
+# Exclude files/directories that should NOT be sent to the Docker build context.
+# This reduces build time, image size, and prevents secrets from leaking into images.
+# =============================================================================
+
+# --- Version Control ---
+.git
+.gitignore
+.gitattributes
+
+# --- Python artifacts ---
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+*.whl
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- Environment / secrets (NEVER include in images) ---
+.env
+.env.*
+*.env
+secrets/
+
+# --- IDE / editor configs ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --- Data artifacts (mounted at runtime, not baked in) ---
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.csv
+*.parquet
+
+# --- Documentation (not needed in runtime images) ---
+docs/
+*.md
+!README.md
+
+# --- Notebooks ---
+notebooks/
+*.ipynb
+
+# --- Tests (not needed in production images) ---
+tests/
+test_*.py
+conftest.py
+pytest.ini
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# --- CI/CD ---
+.github/
+.gitlab-ci.yml
+Jenkinsfile
+
+# --- Infrastructure configs (not needed inside app images) ---
+infrastructure/
+docker-compose*.yml
+Makefile
+Procfile
+
+# --- Monitoring configs ---
+prometheus*.yml
+alertmanager*.yml
+grafana/
+
+# --- Helm / K8s ---
+helm/
+k8s/
+*.yaml
+!requirements.yaml
+
+# --- Misc ---
+LICENSE
+CHANGELOG.md
+CONTRIBUTING.md
+*.log
+*.tar
+*.tar.gz
+*.zip

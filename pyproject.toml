@@ -1,0 +1,190 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel>=0.41.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "smooth-operator"
+version = "0.1.0"
+description = "AI-powered cold outreach engine with intelligent lead enrichment, personalized email generation, and autonomous agent orchestration."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    {name = "Smooth Operator Team"},
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications :: Email",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30.0",
+    "alembic>=1.14.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.6.0",
+    "redis>=5.2.0",
+    "httpx>=0.28.0",
+    "beautifulsoup4>=4.12.3",
+    "chromadb>=0.5.23",
+    "langchain>=0.3.14",
+    "langchain-core>=0.3.28",
+    "langchain-community>=0.3.14",
+    "langgraph>=0.2.60",
+    "langsmith>=0.2.10",
+    "sentence-transformers>=3.3.1",
+    "rank-bm25>=0.2.2",
+    "openai>=1.58.0",
+    "google-generativeai>=0.8.4",
+    "python-dotenv>=1.0.1",
+    "structlog>=24.4.0",
+    "prometheus-client>=0.21.1",
+    "tenacity>=9.0.0",
+    "jinja2>=3.1.4",
+    "python-multipart>=0.0.18",
+    "aiofiles>=24.1.0",
+    "aiosmtplib>=3.0.2",
+    "email-validator>=2.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.4",
+    "pytest-asyncio>=0.25.0",
+    "pytest-cov>=6.0.0",
+    "pytest-mock>=3.14.0",
+    "ruff>=0.8.6",
+    "mypy>=1.14.0",
+    "httpx>=0.28.0",
+    "pre-commit>=4.0.1",
+    "factory-boy>=3.3.1",
+    "faker>=33.1.0",
+    "aiosqlite>=0.20.0",
+]
+ml = [
+    "transformers>=4.47.1",
+    "peft>=0.14.0",
+    "datasets>=3.2.0",
+    "torch>=2.5.1",
+    "accelerate>=1.2.1",
+    "bitsandbytes>=0.45.0",
+    "deepeval>=2.1.4",
+    "ragas>=0.2.8",
+]
+
+[project.scripts]
+smooth-operator = "src.api.main:run_server"
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "TCH",  # flake8-type-checking
+    "RUF",  # ruff-specific rules
+    "S",    # flake8-bandit (security)
+    "C4",   # flake8-comprehensions
+    "DTZ",  # flake8-datetimez
+    "T20",  # flake8-print
+    "PTH",  # flake8-use-pathlib
+    "ERA",  # eradicate (commented-out code)
+    "PL",   # pylint
+    "PERF", # perflint
+    "FURB", # refurb
+    "LOG",  # flake8-logging
+    "RET",  # flake8-return
+    "ARG",  # flake8-unused-arguments
+    "TRY",  # tryceratops
+]
+ignore = [
+    "E501",    # line too long (handled by formatter)
+    "S101",    # use of assert (needed in tests)
+    "TRY003",  # long messages in exception classes
+    "PLR0913", # too many arguments
+    "B008",    # function call in default argument (FastAPI Depends)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "ARG001", "ARG002"]
+"src/api/routes/*.py" = ["B008"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--tb=short",
+    "-ra",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests requiring external services",
+    "e2e: marks end-to-end tests",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+show_error_codes = true
+namespace_packages = true
+explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = [
+    "chromadb.*",
+    "langchain.*",
+    "langchain_core.*",
+    "langchain_community.*",
+    "langgraph.*",
+    "langsmith.*",
+    "sentence_transformers.*",
+    "rank_bm25.*",
+    "google.generativeai.*",
+    "bs4.*",
+    "redis.*",
+    "aiosmtplib.*",
+]
+ignore_missing_imports = true

@@ -1,0 +1,16 @@
+# ML dependencies — install with: pip install -r requirements/ml.txt
+-r base.txt
+
+# Transformers & Fine-tuning
+transformers==4.47.1
+peft==0.14.0
+datasets==3.2.0
+accelerate==1.2.1
+bitsandbytes==0.45.0
+
+# PyTorch (CPU — replace with cu121 variant for GPU)
+torch==2.5.1
+
+# Evaluation
+deepeval==2.1.4
+ragas==0.2.8

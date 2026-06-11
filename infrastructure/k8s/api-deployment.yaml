@@ -1,0 +1,185 @@
+# =============================================================================
+# api-deployment.yaml — FastAPI Application Deployment + Service
+# =============================================================================
+# Deploys the Smooth Operator API with:
+#   - 2 replicas for availability
+#   - Rolling update strategy (zero-downtime deploys)
+#   - Liveness + readiness probes
+#   - Resource requests/limits
+#   - Config from ConfigMap + Secrets
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: smooth-operator-api
+  namespace: smooth-operator
+  labels:
+    app.kubernetes.io/name: smooth-operator-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: smooth-operator
+    app.kubernetes.io/managed-by: kubectl
+spec:
+  replicas: 2
+  # Rolling update: replace one pod at a time so at least 1 is always serving.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: smooth-operator-api
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: smooth-operator-api
+        app.kubernetes.io/component: api
+        app.kubernetes.io/part-of: smooth-operator
+      annotations:
+        # Force rollout when configmap changes
+        checksum/config: "{{ include (print $.Template.BasePath \"/configmap.yaml\") . | sha256sum }}"
+        # Prometheus scrape annotations
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Use a service account with minimal permissions
+      serviceAccountName: smooth-operator-api
+      # Spread replicas across nodes for high availability
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: smooth-operator-api
+      # Security context: non-root, read-only filesystem
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+      containers:
+        - name: api
+          image: ghcr.io/smoothop/smooth-operator-api:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          # Environment variables from ConfigMap (non-sensitive)
+          envFrom:
+            - configMapRef:
+                name: smooth-operator-config
+          # Environment variables from Secret (sensitive)
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: smooth-operator-secrets
+                  key: DATABASE_URL
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: smooth-operator-secrets
+                  key: REDIS_URL
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: smooth-operator-secrets
+                  key: OPENAI_API_KEY
+            - name: SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: smooth-operator-secrets
+                  key: SMTP_PASSWORD
+          # Liveness probe: is the container alive?
+          # If this fails, Kubernetes RESTARTS the container.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Readiness probe: is the container ready to accept traffic?
+          # If this fails, the pod is removed from Service endpoints (no traffic).
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # Startup probe: gives the container extra time on first boot.
+          # Prevents liveness probe from killing slow-starting containers.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12
+          # Resource management
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          # Security hardening for the container
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          # Tmpfs for any writable temp files the app needs
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 100Mi
+      # Graceful shutdown: give in-flight requests time to complete
+      terminationGracePeriodSeconds: 30
+---
+# =============================================================================
+# Service — Exposes the API deployment within the cluster
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: smooth-operator-api
+  namespace: smooth-operator
+  labels:
+    app.kubernetes.io/name: smooth-operator-api
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: smooth-operator
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: smooth-operator-api
+    app.kubernetes.io/component: api
+---
+# =============================================================================
+# ServiceAccount — Minimal RBAC identity for API pods
+# =============================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: smooth-operator-api
+  namespace: smooth-operator
+  labels:
+    app.kubernetes.io/name: smooth-operator-api
+    app.kubernetes.io/part-of: smooth-operator

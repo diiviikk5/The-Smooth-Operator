@@ -1,0 +1,202 @@
+# =============================================================================
+# worker-deployment.yaml — Background Worker Deployment + HPA
+# =============================================================================
+# Deploys Celery workers that auto-scale based on CPU usage and queue depth.
+# Workers handle: scraping, email sending, embedding generation.
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: smooth-operator-worker
+  namespace: smooth-operator
+  labels:
+    app.kubernetes.io/name: smooth-operator-worker
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: smooth-operator
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 2
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: smooth-operator-worker
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: smooth-operator-worker
+        app.kubernetes.io/component: worker
+        app.kubernetes.io/part-of: smooth-operator
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9191"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: smooth-operator-worker
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+      containers:
+        - name: worker
+          image: ghcr.io/smoothop/smooth-operator-worker:latest
+          imagePullPolicy: Always
+          # Workers don't expose HTTP ports — they pull from Redis queues.
+          # But we expose a metrics port for Prometheus scraping via a
+          # Celery exporter sidecar or built-in metrics endpoint.
+          ports:
+            - name: metrics
+              containerPort: 9191
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: smooth-operator-config
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: smooth-operator-secrets
+                  key: DATABASE_URL
+            - name: CELERY_BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: smooth-operator-secrets
+                  key: REDIS_URL
+            - name: CELERY_RESULT_BACKEND
+              valueFrom:
+                secretKeyRef:
+                  name: smooth-operator-secrets
+                  key: REDIS_URL
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: smooth-operator-secrets
+                  key: OPENAI_API_KEY
+            - name: SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: smooth-operator-secrets
+                  key: SMTP_PASSWORD
+            # Worker-specific config
+            - name: CELERY_CONCURRENCY
+              value: "4"
+            - name: CELERY_QUEUES
+              value: "default,scraping,email,embeddings"
+          # Liveness: check if the Celery worker process is alive
+          livenessProbe:
+            exec:
+              command:
+                - "sh"
+                - "-c"
+                - "celery -A src.workers.celery_app inspect ping --timeout 5 2>/dev/null | grep -q 'pong'"
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            timeoutSeconds: 15
+            failureThreshold: 3
+          # Readiness: worker is ready when it can accept tasks
+          readinessProbe:
+            exec:
+              command:
+                - "sh"
+                - "-c"
+                - "celery -A src.workers.celery_app inspect active --timeout 5 2>/dev/null"
+            initialDelaySeconds: 20
+            periodSeconds: 30
+            timeoutSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 500Mi
+      terminationGracePeriodSeconds: 120
+---
+# =============================================================================
+# HPA — Auto-scale workers based on CPU + custom queue depth metric
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: smooth-operator-worker-hpa
+  namespace: smooth-operator
+  labels:
+    app.kubernetes.io/name: smooth-operator-worker
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/part-of: smooth-operator
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: smooth-operator-worker
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+    # Scale on CPU utilization — target 70%
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    # Scale on memory utilization — target 80%
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+    # Scale on custom metric: Celery queue depth.
+    # Requires prometheus-adapter or KEDA to expose this metric.
+    # When average queue depth exceeds 10 tasks per worker, scale up.
+    - type: Pods
+      pods:
+        metric:
+          name: celery_queue_depth
+        target:
+          type: AverageValue
+          averageValue: "10"
+  behavior:
+    # Scale up aggressively (don't let queues back up)
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    # Scale down conservatively (avoid flapping)
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+---
+# =============================================================================
+# ServiceAccount — Minimal RBAC identity for worker pods
+# =============================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: smooth-operator-worker
+  namespace: smooth-operator
+  labels:
+    app.kubernetes.io/name: smooth-operator-worker
+    app.kubernetes.io/part-of: smooth-operator

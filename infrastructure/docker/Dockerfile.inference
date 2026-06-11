@@ -1,0 +1,147 @@
+# =============================================================================
+# Dockerfile.inference — The Smooth Operator vLLM Inference Server
+# =============================================================================
+# GPU-accelerated inference server using vLLM for high-throughput LLM serving.
+# Supports PagedAttention, continuous batching, and OpenAI-compatible API.
+#
+# Prerequisites:
+#   - NVIDIA GPU with CUDA 12.1+ support
+#   - nvidia-container-toolkit installed on host
+#
+# Build:  docker build -f infrastructure/docker/Dockerfile.inference -t smooth-operator-inference .
+# Run:    docker run --gpus all -p 8001:8001 -v /path/to/models:/models smooth-operator-inference
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Stage 1: Builder — install Python + vLLM + dependencies
+# ---------------------------------------------------------------------------
+FROM nvidia/cuda:12.1.0-devel-ubuntu22.04 AS builder
+
+# Prevent interactive prompts during apt installs
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Install Python 3.11 and build tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-venv \
+    python3.11-dev \
+    python3-pip \
+    build-essential \
+    curl \
+    wget \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Make python3.11 the default python
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 && \
+    update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
+
+# Create virtualenv
+RUN python3.11 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install vLLM and dependencies.
+# vLLM is the core serving engine — it provides:
+#   - PagedAttention for efficient KV-cache memory management
+#   - Continuous batching for high throughput
+#   - OpenAI-compatible API endpoint
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir \
+    vllm>=0.4.0 \
+    torch>=2.1.0 \
+    transformers>=4.40.0 \
+    accelerate>=0.28.0 \
+    sentencepiece \
+    protobuf \
+    httpx \
+    uvicorn \
+    fastapi
+
+# ---------------------------------------------------------------------------
+# Stage 2: Runtime — CUDA runtime (no compiler toolchain)
+# ---------------------------------------------------------------------------
+FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04 AS runtime
+
+LABEL org.opencontainers.image.title="smooth-operator-inference" \
+      org.opencontainers.image.description="The Smooth Operator — vLLM Inference Server (GPU)" \
+      org.opencontainers.image.source="https://github.com/smoothop/smooth-operator"
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    # --- Model configuration (override at runtime) ---
+    MODEL_NAME=mistralai/Mistral-7B-Instruct-v0.3 \
+    MODEL_DIR=/models \
+    # --- vLLM server configuration ---
+    VLLM_HOST=0.0.0.0 \
+    VLLM_PORT=8001 \
+    MAX_MODEL_LEN=4096 \
+    GPU_MEMORY_UTILIZATION=0.90 \
+    # --- Hugging Face cache ---
+    HF_HOME=/models/hf_cache \
+    TRANSFORMERS_CACHE=/models/hf_cache
+
+# Install Python 3.11 runtime (no dev headers needed) + curl for health checks
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-venv \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 && \
+    update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1
+
+# Copy virtualenv with all installed packages from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Create non-root user.
+# Note: GPU access works fine as non-root with nvidia-container-toolkit.
+RUN groupadd --gid 1001 appuser && \
+    useradd --uid 1001 --gid appuser --shell /bin/bash --create-home appuser
+
+# Create model directory (will be mounted as a volume in production
+# to avoid baking multi-GB model weights into the image).
+RUN mkdir -p /models/hf_cache && chown -R appuser:appuser /models
+
+WORKDIR /app
+
+# Copy any custom inference server code (e.g., custom API wrappers)
+COPY src/inference/ /app/src/inference/ 2>/dev/null || true
+
+RUN chown -R appuser:appuser /app
+
+USER appuser
+
+# Expose the inference API port
+EXPOSE 8001
+
+# Health check — vLLM serves an OpenAI-compatible API; we hit /health.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=5 \
+    CMD curl -f http://localhost:8001/health || exit 1
+
+# Start vLLM's OpenAI-compatible API server.
+# Key flags:
+#   --model: HuggingFace model ID or local path
+#   --host/--port: bind address
+#   --max-model-len: maximum sequence length (reduce for lower VRAM)
+#   --gpu-memory-utilization: fraction of GPU memory to use (0.9 = 90%)
+#   --dtype auto: automatically select bfloat16/float16 based on GPU
+#   --enforce-eager: disable CUDA graphs for debugging (remove in prod for perf)
+CMD python -m vllm.entrypoints.openai.api_server \
+    --model "${MODEL_NAME}" \
+    --host "${VLLM_HOST}" \
+    --port "${VLLM_PORT}" \
+    --max-model-len "${MAX_MODEL_LEN}" \
+    --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION}" \
+    --dtype auto \
+    --trust-remote-code \
+    --download-dir "${MODEL_DIR}"

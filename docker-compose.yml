@@ -1,0 +1,350 @@
+# =============================================================================
+# docker-compose.yml — The Smooth Operator Local Development Stack
+# =============================================================================
+# Spins up the ENTIRE local dev environment with a single command:
+#   docker compose up -d
+#
+# Services:
+#   api          — FastAPI application server (port 8000)
+#   worker       — Celery background workers (scraping, email, embeddings)
+#   postgres     — PostgreSQL 15 relational database (port 5432)
+#   redis        — Redis 7 message broker & cache (port 6379)
+#   chromadb     — ChromaDB vector database (port 8100)
+#   prometheus   — Metrics collection (port 9090)
+#   grafana      — Metrics dashboards (port 3000)
+#   prefect      — Workflow orchestration UI (port 4200)
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # API — FastAPI application server
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.api
+    container_name: smooth-operator-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - APP_ENV=development
+      - LOG_LEVEL=debug
+      - DATABASE_URL=postgresql+asyncpg://smoothop:smoothop_dev_pass@postgres:5432/smoothop
+      - REDIS_URL=redis://redis:6379/0
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8100
+      - PREFECT_API_URL=http://prefect:4200/api
+    volumes:
+      # Mount src/ for hot-reload during development. In production, code is
+      # baked into the image — this volume is dev-only.
+      - ./src:/app/src:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      chromadb:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - smooth-operator-network
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  # ---------------------------------------------------------------------------
+  # Worker — Celery background workers
+  # ---------------------------------------------------------------------------
+  worker:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.worker
+    container_name: smooth-operator-worker
+    env_file:
+      - .env
+    environment:
+      - APP_ENV=development
+      - LOG_LEVEL=debug
+      - DATABASE_URL=postgresql+asyncpg://smoothop:smoothop_dev_pass@postgres:5432/smoothop
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - CHROMA_HOST=chromadb
+      - CHROMA_PORT=8100
+      - CELERY_CONCURRENCY=2
+    volumes:
+      - ./src:/app/src:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: always
+    networks:
+      - smooth-operator-network
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 2G
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — Primary relational database
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: smooth-operator-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: smoothop
+      POSTGRES_USER: smoothop
+      POSTGRES_PASSWORD: smoothop_dev_pass
+      # Performance tuning for dev (not for production!)
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Mount init scripts to create schemas/extensions on first boot
+      # Place .sql files in infrastructure/docker/init-db/ to auto-run them.
+      - ./infrastructure/docker/init-db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smoothop -d smoothop"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - smooth-operator-network
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.1"
+          memory: 128M
+
+  # ---------------------------------------------------------------------------
+  # Redis — Message broker (Celery) + cache + rate limiter
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: smooth-operator-redis
+    ports:
+      - "6379:6379"
+    # Enable AOF persistence so queued tasks survive container restarts.
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - smooth-operator-network
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.05"
+          memory: 64M
+
+  # ---------------------------------------------------------------------------
+  # ChromaDB — Vector database for RAG embeddings
+  # ---------------------------------------------------------------------------
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: smooth-operator-chromadb
+    ports:
+      - "8100:8000"
+    environment:
+      # ChromaDB configuration
+      IS_PERSISTENT: "TRUE"
+      PERSIST_DIRECTORY: /chroma/chroma
+      ANONYMIZED_TELEMETRY: "FALSE"
+      ALLOW_RESET: "TRUE"
+    volumes:
+      - chroma_data:/chroma/chroma
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - smooth-operator-network
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.1"
+          memory: 128M
+
+  # ---------------------------------------------------------------------------
+  # Prometheus — Metrics collection & alerting
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: smooth-operator-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infrastructure/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infrastructure/monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.console.libraries=/etc/prometheus/console_libraries"
+      - "--web.console.templates=/etc/prometheus/consoles"
+      - "--web.enable-lifecycle"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - smooth-operator-network
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.1"
+          memory: 128M
+
+  # ---------------------------------------------------------------------------
+  # Grafana — Dashboards & visualization
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:latest
+    container_name: smooth-operator-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: smooth_grafana_dev
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: "http://localhost:3000"
+      GF_INSTALL_PLUGINS: "grafana-clock-panel,grafana-simple-json-datasource"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      # Auto-provision datasources and dashboards on first boot
+      - ./infrastructure/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infrastructure/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - smooth-operator-network
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+        reservations:
+          cpus: "0.05"
+          memory: 64M
+
+  # ---------------------------------------------------------------------------
+  # Prefect — Workflow orchestration server & UI
+  # ---------------------------------------------------------------------------
+  prefect:
+    image: prefecthq/prefect:2-python3.11
+    container_name: smooth-operator-prefect
+    ports:
+      - "4200:4200"
+    environment:
+      PREFECT_SERVER_API_HOST: "0.0.0.0"
+      PREFECT_SERVER_API_PORT: "4200"
+      PREFECT_API_DATABASE_CONNECTION_URL: "postgresql+asyncpg://smoothop:smoothop_dev_pass@postgres:5432/prefect"
+      PREFECT_LOGGING_LEVEL: "DEBUG"
+    command: prefect server start
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4200/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - smooth-operator-network
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+        reservations:
+          cpus: "0.1"
+          memory: 128M
+
+# =============================================================================
+# Named Volumes — Persist data across container restarts
+# =============================================================================
+volumes:
+  postgres_data:
+    driver: local
+    name: smooth-operator-postgres-data
+  redis_data:
+    driver: local
+    name: smooth-operator-redis-data
+  chroma_data:
+    driver: local
+    name: smooth-operator-chroma-data
+  grafana_data:
+    driver: local
+    name: smooth-operator-grafana-data
+  prometheus_data:
+    driver: local
+    name: smooth-operator-prometheus-data
+
+# =============================================================================
+# Networks — All services communicate on a shared bridge network
+# =============================================================================
+networks:
+  smooth-operator-network:
+    driver: bridge
+    name: smooth-operator-network

@@ -1,0 +1,22 @@
+# Dev dependencies — install with: pip install -r requirements/dev.txt
+-r base.txt
+
+# Testing
+pytest==8.3.4
+pytest-asyncio==0.25.0
+pytest-cov==6.0.0
+pytest-mock==3.14.0
+factory-boy==3.3.1
+faker==33.1.0
+
+# SQLite async driver for tests
+aiosqlite==0.20.0
+
+# Linting & Formatting
+ruff==0.8.6
+
+# Type Checking
+mypy==1.14.1
+
+# Pre-commit hooks
+pre-commit==4.0.1

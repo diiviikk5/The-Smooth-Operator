@@ -1,0 +1,56 @@
+# Core Framework
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+python-multipart==0.0.18
+
+# Database
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.1
+
+# Validation & Settings
+pydantic==2.10.4
+pydantic-settings==2.7.1
+email-validator==2.2.0
+
+# Cache
+redis==5.2.1
+
+# HTTP Client
+httpx==0.28.1
+
+# Web Scraping
+beautifulsoup4==4.12.3
+
+# Vector DB
+chromadb==0.5.23
+
+# LLM / AI
+langchain==0.3.14
+langchain-core==0.3.28
+langchain-community==0.3.14
+langgraph==0.2.60
+langsmith==0.2.10
+openai==1.58.1
+google-generativeai==0.8.4
+
+# Embeddings & Retrieval
+sentence-transformers==3.3.1
+rank-bm25==0.2.2
+
+# Templating
+jinja2==3.1.5
+
+# Email
+aiosmtplib==3.0.2
+
+# Async File I/O
+aiofiles==24.1.0
+
+# Observability
+structlog==24.4.0
+prometheus-client==0.21.1
+
+# Utilities
+python-dotenv==1.0.1
+tenacity==9.0.0
