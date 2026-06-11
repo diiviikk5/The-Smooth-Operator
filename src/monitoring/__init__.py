@@ -1,4 +1,4 @@
-\"\"\"Monitoring package init.\"\"\"
+"""Monitoring package init."""
 from src.monitoring.traces import TracingManager
 from src.monitoring.metrics_collector import MetricsCollector
 from src.monitoring.cost_tracker import CostTracker

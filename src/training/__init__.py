@@ -1,4 +1,4 @@
-\"\"\"Training package init.\"\"\"
+"""Training package init."""
 from src.training.lora_trainer import LoRATrainer
 from src.training.data_prep import TrainingDataPreparator
 from src.training.prompt_registry import PromptRegistry

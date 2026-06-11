@@ -1,4 +1,4 @@
-\"\"\"Evaluation package init.\"\"\"
+"""Evaluation package init."""
 from src.evaluation.runner import EvaluationRunner
 
 __all__ = ["EvaluationRunner"]

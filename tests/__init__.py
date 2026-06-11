@@ -1,1 +1,1 @@
-\"\"\"Tests package init.\"\"\"
+"""Tests package init."""

@@ -1,4 +1,4 @@
-\"\"\"Metrics sub-package init.\"\"\"
+"""Metrics sub-package init."""
 from src.evaluation.metrics.personalization import PersonalizationMetric
 from src.evaluation.metrics.faithfulness import FaithfulnessMetric
 from src.evaluation.metrics.hallucination import HallucinationMetric
