@@ -1,0 +1,82 @@
+# =============================================================================
+# ingress.yaml — Nginx Ingress with TLS
+# =============================================================================
+# Routes external traffic to internal services:
+#   smooth-operator.example.com/       → API service
+#   smooth-operator.example.com/grafana → Grafana dashboards
+#
+# TLS via cert-manager (automatically provisions Let's Encrypt certificates).
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: smooth-operator-ingress
+  namespace: smooth-operator
+  labels:
+    app.kubernetes.io/name: smooth-operator-ingress
+    app.kubernetes.io/component: networking
+    app.kubernetes.io/part-of: smooth-operator
+  annotations:
+    # Ingress class: use nginx ingress controller
+    kubernetes.io/ingress.class: nginx
+    # TLS: cert-manager will auto-provision a certificate from Let's Encrypt
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    # --- Rate limiting ---
+    # Global rate limit: 100 requests/second per IP
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    # Burst allowance: up to 200 requests before rate limiting kicks in
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "2"
+    # Return 429 when rate limited (not 503)
+    nginx.ingress.kubernetes.io/limit-rate-after: "100"
+    # --- Security headers ---
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Frame-Options: DENY";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-XSS-Protection: 1; mode=block";
+      more_set_headers "Referrer-Policy: strict-origin-when-cross-origin";
+      more_set_headers "Permissions-Policy: camera=(), microphone=(), geolocation=()";
+    # --- Proxy settings ---
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "15"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    # --- CORS (if API is consumed from browser) ---
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://smooth-operator.example.com"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "Authorization, Content-Type, X-Request-ID"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - smooth-operator.example.com
+      # cert-manager creates this Secret automatically
+      secretName: smooth-operator-tls
+  rules:
+    - host: smooth-operator.example.com
+      http:
+        paths:
+          # API — primary application
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: smooth-operator-api
+                port:
+                  number: 8000
+          # Grafana — monitoring dashboards
+          - path: /grafana
+            pathType: Prefix
+            backend:
+              service:
+                name: smooth-operator-grafana
+                port:
+                  number: 3000
+          # Prometheus — metrics (restrict access in production)
+          - path: /prometheus
+            pathType: Prefix
+            backend:
+              service:
+                name: smooth-operator-prometheus
+                port:
+                  number: 9090
