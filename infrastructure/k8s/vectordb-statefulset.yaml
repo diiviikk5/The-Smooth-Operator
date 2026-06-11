@@ -1,0 +1,151 @@
+# =============================================================================
+# vectordb-statefulset.yaml — ChromaDB Vector Database StatefulSet
+# =============================================================================
+# StatefulSet (not Deployment) because:
+#   - Pods get stable DNS names (vectordb-0, vectordb-1, ...)
+#   - PVCs are NOT deleted on scale-down (data persists)
+#   - Ordered startup/shutdown for data consistency
+# =============================================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: smooth-operator-vectordb
+  namespace: smooth-operator
+  labels:
+    app.kubernetes.io/name: smooth-operator-vectordb
+    app.kubernetes.io/component: vectordb
+    app.kubernetes.io/part-of: smooth-operator
+spec:
+  serviceName: smooth-operator-vectordb-headless
+  replicas: 1
+  # OrderedReady: pods are created/deleted sequentially (0 → 1 → 2)
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: smooth-operator-vectordb
+      app.kubernetes.io/component: vectordb
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: smooth-operator-vectordb
+        app.kubernetes.io/component: vectordb
+        app.kubernetes.io/part-of: smooth-operator
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+    spec:
+      securityContext:
+        runAsNonRoot: false
+        fsGroup: 1000
+      containers:
+        - name: chromadb
+          image: chromadb/chroma:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: IS_PERSISTENT
+              value: "TRUE"
+            - name: PERSIST_DIRECTORY
+              value: "/chroma/chroma"
+            - name: ANONYMIZED_TELEMETRY
+              value: "FALSE"
+            - name: ALLOW_RESET
+              value: "FALSE"
+            - name: CHROMA_SERVER_AUTH_PROVIDER
+              value: ""
+          livenessProbe:
+            httpGet:
+              path: /api/v1/heartbeat
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/v1/heartbeat
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: chroma-data
+              mountPath: /chroma/chroma
+      terminationGracePeriodSeconds: 30
+  # VolumeClaimTemplates create a PVC per pod that persists independently.
+  volumeClaimTemplates:
+    - metadata:
+        name: chroma-data
+        labels:
+          app.kubernetes.io/name: smooth-operator-vectordb
+          app.kubernetes.io/component: vectordb
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # Use the cluster's default StorageClass.
+        # Override with storageClassName for specific backends (e.g., gp3, pd-ssd).
+        resources:
+          requests:
+            storage: 50Gi
+---
+# =============================================================================
+# Headless Service — Provides stable DNS for each StatefulSet pod
+# =============================================================================
+# Pods are addressable as:
+#   smooth-operator-vectordb-0.smooth-operator-vectordb-headless.smooth-operator.svc.cluster.local
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: smooth-operator-vectordb-headless
+  namespace: smooth-operator
+  labels:
+    app.kubernetes.io/name: smooth-operator-vectordb
+    app.kubernetes.io/component: vectordb
+    app.kubernetes.io/part-of: smooth-operator
+spec:
+  # clusterIP: None makes this a headless service — DNS returns pod IPs directly
+  clusterIP: None
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: smooth-operator-vectordb
+    app.kubernetes.io/component: vectordb
+---
+# =============================================================================
+# ClusterIP Service — Standard service for internal load-balanced access
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: smooth-operator-vectordb
+  namespace: smooth-operator
+  labels:
+    app.kubernetes.io/name: smooth-operator-vectordb
+    app.kubernetes.io/component: vectordb
+    app.kubernetes.io/part-of: smooth-operator
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: smooth-operator-vectordb
+    app.kubernetes.io/component: vectordb

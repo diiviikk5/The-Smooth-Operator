@@ -1,0 +1,192 @@
+# =============================================================================
+# postgres-deployment.yaml — PostgreSQL StatefulSet + Service
+# =============================================================================
+# StatefulSet (not Deployment) because PostgreSQL needs:
+#   - Stable storage that persists across pod restarts
+#   - Consistent pod identity for replication (if HA is added later)
+# =============================================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: smooth-operator-postgres
+  namespace: smooth-operator
+  labels:
+    app.kubernetes.io/name: smooth-operator-postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: smooth-operator
+spec:
+  serviceName: smooth-operator-postgres-headless
+  replicas: 1
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: smooth-operator-postgres
+      app.kubernetes.io/component: database
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: smooth-operator-postgres
+        app.kubernetes.io/component: database
+        app.kubernetes.io/part-of: smooth-operator
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+      # Init container: run schema migrations or create extensions
+      initContainers:
+        - name: init-schema
+          image: postgres:15-alpine
+          command:
+            - "sh"
+            - "-c"
+            - |
+              echo "Waiting for PostgreSQL to be ready..."
+              until pg_isready -h localhost -p 5432 -U "$POSTGRES_USER" 2>/dev/null; do
+                sleep 2
+              done
+              echo "PostgreSQL is ready. Init container complete."
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: smooth-operator-secrets
+                  key: POSTGRES_USER
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          env:
+            - name: POSTGRES_DB
+              value: "smoothop"
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: smooth-operator-secrets
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: smooth-operator-secrets
+                  key: POSTGRES_PASSWORD
+            # Performance tuning (tuned for 2Gi memory limit)
+            - name: POSTGRES_INITDB_ARGS
+              value: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+            # PostgreSQL config via environment
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          # Additional PostgreSQL configuration
+          args:
+            - "-c"
+            - "shared_buffers=512MB"
+            - "-c"
+            - "effective_cache_size=1536MB"
+            - "-c"
+            - "maintenance_work_mem=128MB"
+            - "-c"
+            - "work_mem=16MB"
+            - "-c"
+            - "max_connections=100"
+            - "-c"
+            - "log_min_duration_statement=1000"
+            - "-c"
+            - "log_statement=ddl"
+          livenessProbe:
+            exec:
+              command:
+                - "pg_isready"
+                - "-U"
+                - "$(POSTGRES_USER)"
+                - "-d"
+                - "smoothop"
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - "pg_isready"
+                - "-U"
+                - "$(POSTGRES_USER)"
+                - "-d"
+                - "smoothop"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+      terminationGracePeriodSeconds: 60
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+        labels:
+          app.kubernetes.io/name: smooth-operator-postgres
+          app.kubernetes.io/component: database
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 20Gi
+---
+# =============================================================================
+# Headless Service — Stable DNS for StatefulSet pods
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: smooth-operator-postgres-headless
+  namespace: smooth-operator
+  labels:
+    app.kubernetes.io/name: smooth-operator-postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: smooth-operator
+spec:
+  clusterIP: None
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: smooth-operator-postgres
+    app.kubernetes.io/component: database
+---
+# =============================================================================
+# ClusterIP Service — Load-balanced access for applications
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: smooth-operator-postgres
+  namespace: smooth-operator
+  labels:
+    app.kubernetes.io/name: smooth-operator-postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: smooth-operator
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: smooth-operator-postgres
+    app.kubernetes.io/component: database
