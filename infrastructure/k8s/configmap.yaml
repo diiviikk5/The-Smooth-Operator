@@ -1,0 +1,87 @@
+# =============================================================================
+# configmap.yaml — Non-Sensitive Configuration
+# =============================================================================
+# Contains environment-specific config that is NOT secret.
+# Mounted into pods via envFrom or individual env references.
+#
+# NEVER put passwords, API keys, or tokens here — use secrets.yaml instead.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: smooth-operator-config
+  namespace: smooth-operator
+  labels:
+    app.kubernetes.io/name: smooth-operator
+    app.kubernetes.io/component: config
+    app.kubernetes.io/part-of: smooth-operator
+data:
+  # --- Application ---
+  APP_NAME: "smooth-operator"
+  APP_ENV: "production"
+  LOG_LEVEL: "info"
+  LOG_FORMAT: "json"
+  DEBUG: "false"
+
+  # --- API Server ---
+  API_HOST: "0.0.0.0"
+  API_PORT: "8000"
+  API_WORKERS: "4"
+  CORS_ORIGINS: "https://smooth-operator.example.com"
+
+  # --- Database (host/port only — credentials in secrets) ---
+  POSTGRES_HOST: "smooth-operator-postgres"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "smoothop"
+
+  # --- Redis (host/port only — full URL in secrets) ---
+  REDIS_HOST: "smooth-operator-redis"
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+
+  # --- ChromaDB / Vector Database ---
+  CHROMA_HOST: "smooth-operator-vectordb"
+  CHROMA_PORT: "8000"
+  CHROMA_COLLECTION: "leads"
+  EMBEDDING_MODEL: "all-MiniLM-L6-v2"
+  EMBEDDING_DIMENSION: "384"
+
+  # --- LLM / Inference ---
+  LLM_PROVIDER: "vllm"
+  LLM_MODEL: "mistralai/Mistral-7B-Instruct-v0.3"
+  LLM_BASE_URL: "http://smooth-operator-inference:8001/v1"
+  LLM_MAX_TOKENS: "1024"
+  LLM_TEMPERATURE: "0.7"
+
+  # --- Email / SMTP ---
+  SMTP_HOST: "smtp.gmail.com"
+  SMTP_PORT: "587"
+  SMTP_USE_TLS: "true"
+  EMAIL_FROM_NAME: "Smooth Operator"
+  EMAIL_RATE_LIMIT: "50"
+  EMAIL_RATE_PERIOD: "3600"
+
+  # --- Celery Worker ---
+  CELERY_TASK_SERIALIZER: "json"
+  CELERY_RESULT_SERIALIZER: "json"
+  CELERY_ACCEPT_CONTENT: "json"
+  CELERY_TIMEZONE: "UTC"
+  CELERY_TASK_TRACK_STARTED: "true"
+
+  # --- Monitoring ---
+  PROMETHEUS_ENABLED: "true"
+  METRICS_PATH: "/metrics"
+
+  # --- Prefect Orchestration ---
+  PREFECT_API_URL: "http://smooth-operator-prefect:4200/api"
+
+  # --- RAG Pipeline ---
+  CHUNK_SIZE: "512"
+  CHUNK_OVERLAP: "50"
+  TOP_K_RETRIEVAL: "5"
+  SIMILARITY_THRESHOLD: "0.7"
+
+  # --- Scraping ---
+  SCRAPE_TIMEOUT: "30"
+  SCRAPE_MAX_RETRIES: "3"
+  SCRAPE_USER_AGENT: "SmoothOperator/1.0 (Lead Research Bot)"
