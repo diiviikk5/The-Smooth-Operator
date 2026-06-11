@@ -69,7 +69,7 @@ graph TB
 
 ---
 
-## ✨ Features
+##  Features
 
 | Category | Capabilities |
 |---|---|
@@ -83,7 +83,7 @@ graph TB
 
 ---
 
-## 🛠 Tech Stack
+##  Tech Stack
 
 | Layer | Technology |
 |---|---|
@@ -102,7 +102,7 @@ graph TB
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
@@ -169,7 +169,7 @@ Navigate to [http://localhost:8000/docs](http://localhost:8000/docs) for the int
 
 ---
 
-## 📁 Project Structure
+##  Project Structure
 
 ```
 smooth-operator/
@@ -218,7 +218,7 @@ smooth-operator/
 
 ---
 
-## 🧑‍💻 Development
+##  Development
 
 ```bash
 # Install dev dependencies
@@ -239,7 +239,7 @@ make migrate-new MSG="add_lead_tags_column"
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)
@@ -253,12 +253,10 @@ Please follow [Conventional Commits](https://www.conventionalcommits.org/) for c
 
 ---
 
-## 📄 License
+##  License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
 
 ---
 
-<p align="center">
-  Built with ☕ and 🎷 by the Smooth Operator team
-</p>
+
